@@ -4,6 +4,8 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./vendor/IRouterClient.sol";
 
+import "forge-std/console.sol";
+
 struct UserOrder {
     address from;
     uint256 fromChainId;
@@ -17,6 +19,7 @@ struct UserOrder {
     uint256 creationTimestamp;
     uint256 duration;
     uint256 nonce;
+    string orderId;
 }
 
 struct ClaimedOrder {
@@ -34,7 +37,7 @@ struct ClaimedOrder {
 }
 
 struct ExecutedOrder {
-    bytes32 orderHash;
+    string orderHash;
     address user;
     address solver;
     address token;
@@ -48,7 +51,8 @@ contract DutchX {
 
     mapping(address user => uint256 nonce) public userNonce;
     mapping(uint64 dstChain => address dutchX) public receiver;
-    mapping(bytes32 orderHash => ClaimedOrder) public claimedOrders;
+    mapping(string orderHash => ClaimedOrder) public claimedOrders;
+    mapping(uint256 nativeChainId => uint64 chainlinkChainId) public chainlinkChainId;
 
     modifier onlyRouter() {
         require(msg.sender == address(ccipRouter), "dutchX/caller not router");
@@ -57,21 +61,23 @@ contract DutchX {
 
     constructor(address router_) {
         ccipRouter = IRouterClient(router_);
+
+        /// intialize the starting chainids
+        chainlinkChainId[80001] = 12532609583862916517;
+        chainlinkChainId[84531] = 5790810961207155433;
     }
 
     function claimOrder(bytes memory encodedUserOrder, bytes memory signature) external {
         address signer = recoverSigner(encodedUserOrder, signature);
 
         UserOrder memory order = abi.decode(encodedUserOrder, (UserOrder));
-        bytes32 orderHash = keccak256(encodedUserOrder);
-
-        ClaimedOrder storage claimedOrder = claimedOrders[orderHash];
+        ClaimedOrder storage claimedOrder = claimedOrders[order.orderId];
 
         require(signer == order.from, "dutchX/invalid signature");
         require(order.nonce == userNonce[signer], "dutchX/invalid nonce");
         require(order.fromChainId == block.chainid, "dutchX/invalid from chain id");
         require(claimedOrder.solver == address(0), "dutchX/order already claimed");
-        require(block.timestamp > order.creationTimestamp + order.duration, "dutchX/order expired");
+        require(block.timestamp < order.creationTimestamp + order.duration, "dutchX/order expired");
 
         uint256 toAmount =
             calculateToAmount(order.startingPrice, order.endingPrice, order.duration, order.creationTimestamp);
@@ -95,11 +101,11 @@ contract DutchX {
         IERC20(claimedOrder.fromToken).transferFrom(claimedOrder.solver, address(this), claimedOrder.stakeAmount);
     }
 
-    function executeOrder(uint256 fromChainId, bytes32 orderHash, address user, address token, uint256 amount)
+    function executeOrder(uint256 fromChainId, string memory orderHash, address user, address token, uint256 amount)
         external
         payable
     {
-        uint64 fromChainIdCasted = uint64(fromChainId);
+        uint64 fromChainIdCasted = chainlinkChainId[fromChainId];
 
         IERC20 tokenContract = IERC20(token);
         uint256 userBalanceBefore = tokenContract.balanceOf(user);
@@ -143,8 +149,10 @@ contract DutchX {
     ) internal view returns (uint256 toAmount) {
         uint256 decayFreq = (block.timestamp - orderCreatingTimestamp - 30) / 6;
         /// 6 sec decay
+        console.log(decayFreq, "decayFreq");
         uint256 decayAmount = (startingPrice - endingPrice) * 6 / duration - 30;
         toAmount = startingPrice - (decayFreq * decayAmount);
+        console.log(toAmount, "toAmount");
     }
 
     function recoverSigner(bytes memory encodedData, bytes memory signature) public pure returns (address) {
