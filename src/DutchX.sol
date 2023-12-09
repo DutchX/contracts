@@ -4,16 +4,18 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./vendor/IRouterClient.sol";
 
-struct OrderInfo {
+struct UserOrder {
     address from;
-    address fromToken;
-    address toToken;
     uint256 fromChainId;
-    uint256 toChainId;
+    address fromToken;
     uint256 fromAmount;
+    uint256 toChainId;
+    address toToken;
     uint256 startingPrice;
+    uint256 endingPrice;
     uint256 stakeAmount;
-    uint256 timestamp;
+    uint256 creationTimestamp;
+    uint256 duration;
     uint256 nonce;
 }
 
@@ -21,32 +23,32 @@ struct ClaimedOrder {
     address from;
     address solver;
     address fromToken;
-    address toToken;
     uint256 fromChainId;
-    uint256 toChainId;
     uint256 fromAmount;
+    address toToken;
+    uint256 toChainId;
     uint256 toAmount;
-    uint256 timestamp;
+    uint256 stakeAmount;
+    uint256 deadline;
     bool isCompleted;
 }
 
-struct ExecuteOrder {
+struct ExecutedOrder {
     bytes32 orderHash;
     address user;
     address solver;
     address token;
     uint256 amount;
+    uint256 executedTime;
 }
 
 contract DutchX {
+    uint256 public constant SOLVER_PERIOD = 3 minutes;
     IRouterClient public ccipRouter;
 
+    mapping(address user => uint256 nonce) public userNonce;
     mapping(uint64 dstChain => address dutchX) public receiver;
-
-    // mapping(address => uint256) public stakeAmounts;
-    mapping(address => uint256) public userNonce;
-    mapping(bytes32 => ClaimedOrder) public claimedOrders;
-    mapping(bytes32 => address) public orderClaimedBy;
+    mapping(bytes32 orderHash => ClaimedOrder) public claimedOrders;
 
     modifier onlyRouter() {
         require(msg.sender == address(ccipRouter), "dutchX/caller not router");
@@ -57,37 +59,40 @@ contract DutchX {
         ccipRouter = IRouterClient(router_);
     }
 
-    function claimOrder(bytes memory encodedOrderInfo, bytes memory signature) external {
-        address signer = recoverSigner(encodedOrderInfo, signature);
-        OrderInfo memory order = abi.decode(encodedOrderInfo, (OrderInfo));
-        bytes32 orderHash = keccak256(encodedOrderInfo);
+    function claimOrder(bytes memory encodedUserOrder, bytes memory signature) external {
+        address signer = recoverSigner(encodedUserOrder, signature);
 
-        require(signer == order.from, "Invalid signature");
-        require(order.nonce == userNonce[signer], "Invalid nonce");
-        require(order.fromChainId == block.chainid, "Invalid from chain id");
-        require(orderClaimedBy[orderHash] == address(0), "Order already claimed");
+        UserOrder memory order = abi.decode(encodedUserOrder, (UserOrder));
+        bytes32 orderHash = keccak256(encodedUserOrder);
 
-        uint256 toAmount = calculateCurrentPrice(order.startingPrice, order.timestamp);
-        require(toAmount > 0, "Order expired");
+        ClaimedOrder storage claimedOrder = claimedOrders[orderHash];
 
-        claimedOrders[orderHash] = ClaimedOrder({
-            from: order.from,
-            solver: msg.sender,
-            fromToken: order.fromToken,
-            toToken: order.toToken,
-            fromChainId: order.fromChainId,
-            toChainId: order.toChainId,
-            fromAmount: order.fromAmount,
-            toAmount: toAmount,
-            timestamp: block.timestamp,
-            isCompleted: false
-        });
+        require(signer == order.from, "dutchX/invalid signature");
+        require(order.nonce == userNonce[signer], "dutchX/invalid nonce");
+        require(order.fromChainId == block.chainid, "dutchX/invalid from chain id");
+        require(claimedOrder.solver == address(0), "dutchX/order already claimed");
 
-        userNonce[signer] += 1;
-        orderClaimedBy[orderHash] = msg.sender;
+        uint256 toAmount =
+            calculateToAmount(order.startingPrice, order.endingPrice, order.duration, order.creationTimestamp);
+        require(toAmount > 0, "dutchX/order expired");
 
-        //TODO: Transfer needs to be a seperate function with message signature check
-        IERC20(order.fromToken).transferFrom(msg.sender, address(this), order.stakeAmount);
+        claimedOrder.from = order.from;
+        claimedOrder.solver = msg.sender;
+        claimedOrder.fromToken = order.fromToken;
+        claimedOrder.fromChainId = block.chainid;
+        claimedOrder.fromAmount = order.fromAmount;
+        claimedOrder.toToken = order.toToken;
+        claimedOrder.toChainId = order.toChainId;
+        claimedOrder.toAmount = toAmount;
+        claimedOrder.stakeAmount = order.stakeAmount;
+        claimedOrder.deadline = block.timestamp + SOLVER_PERIOD;
+
+        unchecked {
+            ++userNonce[signer];
+        }
+
+        IERC20(claimedOrder.fromToken).transferFrom(claimedOrder.from, address(this), claimedOrder.fromAmount);
+        IERC20(claimedOrder.fromToken).transferFrom(claimedOrder.solver, address(this), claimedOrder.stakeAmount);
     }
 
     function executeOrder(uint256 fromChainId, bytes32 orderHash, address user, address token, uint256 amount)
@@ -106,7 +111,7 @@ contract DutchX {
         /// construct the ccip message
         EVM2AnyMessage memory message = EVM2AnyMessage(
             abi.encode(receiver[fromChainIdCasted]),
-            abi.encode(ExecuteOrder(orderHash, user, msg.sender, token, amount)),
+            abi.encode(ExecutedOrder(orderHash, user, msg.sender, token, amount, block.timestamp)),
             new EVMTokenAmount[](0),
             address(0),
             bytes("")
@@ -117,9 +122,9 @@ contract DutchX {
 
     function ccipReceive(Any2EVMMessage memory message) external onlyRouter {
         /// ignore messageId storing for replay as we've innate replay protection
-        ExecuteOrder memory orderExecuted = abi.decode(message.data, (ExecuteOrder));
-
+        ExecutedOrder memory orderExecuted = abi.decode(message.data, (ExecutedOrder));
         ClaimedOrder storage claimedOrder = claimedOrders[orderExecuted.orderHash];
+
         require(!claimedOrder.isCompleted, "dutchX/already executed");
         require(
             claimedOrder.toToken == orderExecuted.token && claimedOrder.toAmount <= orderExecuted.amount,
@@ -127,13 +132,19 @@ contract DutchX {
         );
         claimedOrder.isCompleted = true;
 
-        IERC20(claimedOrder.fromToken).transfer(claimedOrder.solver, claimedOrder.fromAmount);
+        IERC20(claimedOrder.fromToken).transfer(claimedOrder.solver, claimedOrder.fromAmount + claimedOrder.fromAmount);
     }
 
-    function calculateCurrentPrice(uint256 startingPrice, uint256 timestamp) internal view returns (uint256) {
-        uint256 timeElapsed = block.timestamp - timestamp;
-        uint256 price = startingPrice - (startingPrice * timeElapsed / 3600);
-        return price;
+    function calculateToAmount(
+        uint256 startingPrice,
+        uint256 endingPrice,
+        uint256 duration,
+        uint256 orderCreatingTimestamp
+    ) internal view returns (uint256 toAmount) {
+        uint256 decayFreq = (block.timestamp - orderCreatingTimestamp - 30) / 6;
+        /// 6 sec decay
+        uint256 decayAmount = (startingPrice - endingPrice) * 6 / duration - 30;
+        toAmount = startingPrice - (decayFreq * decayAmount);
     }
 
     function recoverSigner(bytes memory encodedData, bytes memory signature) public pure returns (address) {
