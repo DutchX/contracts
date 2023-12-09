@@ -22,6 +22,11 @@ struct Any2EVMMessage {
     EVMTokenAmount[] destTokenAmounts;
 }
 
+struct EVMExtraArgsV1 {
+    uint256 gasLimit;
+    bool strict;
+}
+
 interface IRouterClient {
     error UnsupportedDestinationChain(uint64 destChainSelector);
     error InsufficientFeeTokenAmount();

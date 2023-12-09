@@ -63,8 +63,12 @@ contract DutchX {
         ccipRouter = IRouterClient(router_);
 
         /// intialize the starting chainids
-        chainlinkChainId[80001] = 12532609583862916517;
+        chainlinkChainId[11155111] = 16015286601757825753;
         chainlinkChainId[84531] = 5790810961207155433;
+    }
+
+    function setReceiver(uint64 dstChain, address dutchX) external {
+        receiver[dstChain] = dutchX;
     }
 
     function claimOrder(bytes memory encodedUserOrder, bytes memory signature) external {
@@ -72,7 +76,7 @@ contract DutchX {
 
         UserOrder memory order = abi.decode(encodedUserOrder, (UserOrder));
         ClaimedOrder storage claimedOrder = claimedOrders[order.orderId];
-
+        console.log("BLOCK CHAIN ID", block.chainid);
         require(signer == order.from, "dutchX/invalid signature");
         require(order.nonce == userNonce[signer], "dutchX/invalid nonce");
         require(order.fromChainId == block.chainid, "dutchX/invalid from chain id");
@@ -114,13 +118,16 @@ contract DutchX {
 
         require(userBalanceAfter - userBalanceBefore >= amount, "dutchX/revert transfer from");
 
+        console.log(receiver[fromChainIdCasted], "receiver from chain id");
+        console.log(fromChainIdCasted, "from chain id casted");
+
         /// construct the ccip message
         EVM2AnyMessage memory message = EVM2AnyMessage(
             abi.encode(receiver[fromChainIdCasted]),
             abi.encode(ExecutedOrder(orderHash, user, msg.sender, token, amount, block.timestamp)),
             new EVMTokenAmount[](0),
             address(0),
-            bytes("")
+            abi.encodeWithSelector(0x97a657c9, EVMExtraArgsV1({gasLimit: 200_000, strict: true}))
         );
 
         ccipRouter.ccipSend{value: ccipRouter.getFee(fromChainIdCasted, message)}(fromChainIdCasted, message);

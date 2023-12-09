@@ -6,16 +6,16 @@ import "src/DutchX.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
 contract DutchXTest is Test {
-    DutchX public dutchXPolygon;
+    DutchX public dutchXETH;
     DutchX public dutchXBase;
 
     MockERC20 public usdt;
     MockERC20 public wstETH;
 
-    uint256 POLYGON_FORK;
+    uint256 ETH_FORK;
     uint256 BASE_FORK;
 
-    uint256 POLYGON_CHAIN_ID = 80001;
+    uint256 ETH_CHAIN_ID = 11155111;
     uint256 BASE_CHAIN_ID = 84531;
 
     address user;
@@ -25,8 +25,8 @@ contract DutchXTest is Test {
         user = vm.addr(420);
         solver = vm.addr(69);
 
-        POLYGON_FORK = vm.createSelectFork(vm.envString("POLYGON_RPC"));
-        dutchXPolygon = new DutchX(0x70499c328e1E2a3c41108bd3730F6670a44595D1);
+        ETH_FORK = vm.createSelectFork(vm.envString("ETH_RPC"));
+        dutchXETH = new DutchX(0x70499c328e1E2a3c41108bd3730F6670a44595D1);
         usdt = new MockERC20(100e18, "USDT", "USDT");
         usdt.transfer(user, 50e18);
         usdt.transfer(solver, 50e18);
@@ -35,16 +35,22 @@ contract DutchXTest is Test {
         dutchXBase = new DutchX(0xA8C0c11bf64AF62CDCA6f93D3769B88BdD7cb93D);
         wstETH = new MockERC20(100e18, "WrappedStEth", "WSTETH");
         wstETH.transfer(solver, 50e18);
+
+        vm.selectFork(ETH_FORK);
+        dutchXETH.setReceiver(5790810961207155433, address(dutchXBase));
+
+        vm.selectFork(BASE_FORK);
+        dutchXBase.setReceiver(16015286601757825753, address(dutchXETH));
     }
 
     function test_validOrder() external {
-        vm.selectFork(POLYGON_FORK);
+        vm.selectFork(ETH_FORK);
 
         vm.startPrank(user);
-        usdt.approve(address(dutchXPolygon), 10e18);
+        usdt.approve(address(dutchXETH), 10e18);
         UserOrder memory order = UserOrder(
             user,
-            POLYGON_CHAIN_ID,
+            ETH_CHAIN_ID,
             address(usdt),
             10e18,
             BASE_CHAIN_ID,
@@ -64,14 +70,35 @@ contract DutchXTest is Test {
         vm.stopPrank();
 
         vm.startPrank(solver);
-        usdt.approve(address(dutchXPolygon), 1e18);
-        dutchXPolygon.claimOrder(abi.encode(order), signature);
+        usdt.approve(address(dutchXETH), 1e18);
+        dutchXETH.claimOrder(abi.encode(order), signature);
         vm.stopPrank();
 
         vm.selectFork(BASE_FORK);
         vm.startPrank(solver);
+        deal(solver, 1 ether);
         wstETH.approve(address(dutchXBase), 996666666666666697);
 
-        dutchXBase.executeOrder(POLYGON_CHAIN_ID, "blah blah black sheep", user, address(wstETH), 996666666666666697);
+        dutchXBase.executeOrder{value: 1 ether}(
+            ETH_CHAIN_ID, "blah blah black sheep", user, address(wstETH), 996666666666666697
+        );
+        vm.stopPrank();
+
+        vm.selectFork(ETH_FORK);
+        address ccipRouter = address(dutchXETH.ccipRouter());
+        vm.startPrank(ccipRouter);
+        dutchXETH.ccipReceive(
+            Any2EVMMessage(
+                bytes32(0),
+                16015286601757825753,
+                abi.encode(dutchXBase),
+                abi.encode(
+                    ExecutedOrder(
+                        "blah blah black sheep", user, solver, address(wstETH), 996666666666666697, block.timestamp
+                    )
+                ),
+                new EVMTokenAmount[](0)
+            )
+        );
     }
 }
