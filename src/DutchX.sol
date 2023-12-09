@@ -145,7 +145,7 @@ contract DutchX {
         );
         claimedOrder.isCompleted = true;
 
-        IERC20(claimedOrder.fromToken).transfer(claimedOrder.solver, claimedOrder.fromAmount + claimedOrder.fromAmount);
+        IERC20(claimedOrder.fromToken).transfer(claimedOrder.solver, claimedOrder.fromAmount + claimedOrder.stakeAmount);
     }
 
     function calculateToAmount(
