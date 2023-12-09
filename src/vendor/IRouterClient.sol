@@ -1,31 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-struct EVMTokenAmount {
-    address token;
-    uint256 amount;
-}
-
-struct EVM2AnyMessage {
-    bytes receiver;
-    bytes data;
-    EVMTokenAmount[] tokenAmounts;
-    address feeToken;
-    bytes extraArgs;
-}
-
-struct Any2EVMMessage {
-    bytes32 messageId;
-    uint64 sourceChainSelector;
-    bytes sender;
-    bytes data;
-    EVMTokenAmount[] destTokenAmounts;
-}
-
-struct EVMExtraArgsV1 {
-    uint256 gasLimit;
-    bool strict;
-}
+import "./Client.sol";
 
 interface IRouterClient {
     error UnsupportedDestinationChain(uint64 destChainSelector);
@@ -48,7 +24,7 @@ interface IRouterClient {
     /// @return fee returns execution fee for the message
     /// delivery to destination chain, denominated in the feeToken specified in the message.
     /// @dev Reverts with appropriate reason upon invalid message.
-    function getFee(uint64 destinationChainSelector, EVM2AnyMessage memory message)
+    function getFee(uint64 destinationChainSelector, Client.EVM2AnyMessage memory message)
         external
         view
         returns (uint256 fee);
@@ -60,7 +36,7 @@ interface IRouterClient {
     /// @dev Note if msg.value is larger than the required fee (from getFee) we accept
     /// the overpayment with no refund.
     /// @dev Reverts with appropriate reason upon invalid message.
-    function ccipSend(uint64 destinationChainSelector, EVM2AnyMessage calldata message)
+    function ccipSend(uint64 destinationChainSelector, Client.EVM2AnyMessage calldata message)
         external
         payable
         returns (bytes32);

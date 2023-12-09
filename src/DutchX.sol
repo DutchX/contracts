@@ -3,6 +3,9 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./vendor/IRouterClient.sol";
+import "./vendor/CCIPReceiver.sol";
+
+import "forge-std/console.sol";
 
 struct UserOrder {
     address from;
@@ -43,7 +46,7 @@ struct ExecutedOrder {
     uint256 executedTime;
 }
 
-contract DutchX {
+contract DutchX is CCIPReceiver {
     uint256 public constant SOLVER_PERIOD = 3 minutes;
     IRouterClient public ccipRouter;
 
@@ -52,18 +55,17 @@ contract DutchX {
     mapping(string orderHash => ClaimedOrder) public claimedOrders;
     mapping(uint256 nativeChainId => uint64 chainlinkChainId) public chainlinkChainId;
 
-    modifier onlyRouter() {
-        require(msg.sender == address(ccipRouter), "dutchX/caller not router");
-        _;
-    }
-
-    constructor(address router_) {
+    constructor(address router_) CCIPReceiver(router_) {
         ccipRouter = IRouterClient(router_);
 
         /// intialize the starting chainids
         chainlinkChainId[11155111] = 16015286601757825753;
         chainlinkChainId[84531] = 5790810961207155433;
     }
+
+    event OrderCreated(ClaimedOrder);
+    event OrderExecuted(ExecutedOrder);
+    event OrderCompleted(string indexed orderHash);
 
     function setReceiver(uint64 dstChain, address dutchX) external {
         receiver[dstChain] = dutchX;
@@ -75,6 +77,7 @@ contract DutchX {
         UserOrder memory order = abi.decode(encodedUserOrder, (UserOrder));
         ClaimedOrder storage claimedOrder = claimedOrders[order.orderId];
 
+        console.log(order.nonce, "nonce");
         require(signer == order.from, "dutchX/invalid signature");
         require(order.nonce == userNonce[signer], "dutchX/invalid nonce");
         require(order.fromChainId == block.chainid, "dutchX/invalid from chain id");
@@ -101,6 +104,8 @@ contract DutchX {
 
         IERC20(claimedOrder.fromToken).transferFrom(claimedOrder.from, address(this), claimedOrder.fromAmount);
         IERC20(claimedOrder.fromToken).transferFrom(claimedOrder.solver, address(this), claimedOrder.stakeAmount);
+
+        emit OrderCreated(claimedOrder);
     }
 
     function executeOrder(uint256 fromChainId, string memory orderHash, address user, address token, uint256 amount)
@@ -116,19 +121,21 @@ contract DutchX {
 
         require(userBalanceAfter - userBalanceBefore >= amount, "dutchX/revert transfer from");
 
+        ExecutedOrder memory executedOrder = ExecutedOrder(orderHash, user, msg.sender, token, amount, block.timestamp);
         /// construct the ccip message
-        EVM2AnyMessage memory message = EVM2AnyMessage(
+        Client.EVM2AnyMessage memory message = Client.EVM2AnyMessage(
             abi.encode(receiver[fromChainIdCasted]),
-            abi.encode(ExecutedOrder(orderHash, user, msg.sender, token, amount, block.timestamp)),
-            new EVMTokenAmount[](0),
+            abi.encode(executedOrder),
+            new Client.EVMTokenAmount[](0),
             address(0),
-            abi.encodeWithSelector(0x97a657c9, EVMExtraArgsV1({gasLimit: 200_000, strict: true}))
+            abi.encodeWithSelector(0x97a657c9, Client.EVMExtraArgsV1({gasLimit: 500_000, strict: false}))
         );
 
         ccipRouter.ccipSend{value: ccipRouter.getFee(fromChainIdCasted, message)}(fromChainIdCasted, message);
+        emit OrderExecuted(executedOrder);
     }
 
-    function ccipReceive(Any2EVMMessage memory message) external onlyRouter {
+    function _ccipReceive(Client.Any2EVMMessage memory message) internal virtual override {
         /// ignore messageId storing for replay as we've innate replay protection
         ExecutedOrder memory orderExecuted = abi.decode(message.data, (ExecutedOrder));
         ClaimedOrder storage claimedOrder = claimedOrders[orderExecuted.orderHash];
@@ -141,6 +148,7 @@ contract DutchX {
         claimedOrder.isCompleted = true;
 
         IERC20(claimedOrder.fromToken).transfer(claimedOrder.solver, claimedOrder.fromAmount + claimedOrder.stakeAmount);
+        emit OrderCompleted(orderExecuted.orderHash);
     }
 
     function calculateToAmount(

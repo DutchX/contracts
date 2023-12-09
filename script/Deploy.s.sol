@@ -18,24 +18,23 @@ contract DeployScript is Script {
     function run() public {
         ETH_FORK = vm.createSelectFork(vm.envString("ETH_RPC"));
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        dutchXETH = new DutchX(0x70499c328e1E2a3c41108bd3730F6670a44595D1);
-        usdt = new MockERC20(100e18, "USDT", "USDT");
+        dutchXETH = new DutchX(0xD0daae2231E9CB96b94C8512223533293C3693Bf);
+        // usdt = new MockERC20(100e18, "USDT", "USDT");
+        // usdt.transfer(user, 50e18);
+        // usdt.transfer(solver, 50e18);
         vm.stopBroadcast();
 
         BASE_FORK = vm.createSelectFork(vm.envString("BASE_RPC"));
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         dutchXBase = new DutchX(0xA8C0c11bf64AF62CDCA6f93D3769B88BdD7cb93D);
-        wstETH = new MockERC20(100e18, "WrappedStEth", "WSTETH");
+        dutchXBase.setReceiver(16015286601757825753, address(dutchXETH));
+        // wstETH = new MockERC20(100e18, "WrappedStEth", "WSTETH");
+        // wstETH.transfer(solver, 50e18);
         vm.stopBroadcast();
 
         vm.selectFork(ETH_FORK);
         vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
         dutchXETH.setReceiver(5790810961207155433, address(dutchXBase));
-        vm.stopBroadcast();
-
-        vm.selectFork(BASE_FORK);
-        vm.startBroadcast(vm.envUint("PRIVATE_KEY"));
-        dutchXBase.setReceiver(16015286601757825753, address(dutchXETH));
         vm.stopBroadcast();
     }
 }
