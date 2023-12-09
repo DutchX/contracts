@@ -2,36 +2,59 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "./vendor/IRouterClient.sol";
+
+struct OrderInfo {
+    address from;
+    address fromToken;
+    address toToken;
+    uint256 fromChainId;
+    uint256 toChainId;
+    uint256 fromAmount;
+    uint256 startingPrice;
+    uint256 stakeAmount;
+    uint256 timestamp;
+    uint256 nonce;
+}
+
+struct ClaimedOrder {
+    address from;
+    address solver;
+    address fromToken;
+    address toToken;
+    uint256 fromChainId;
+    uint256 toChainId;
+    uint256 fromAmount;
+    uint256 toAmount;
+    uint256 timestamp;
+    bool isCompleted;
+}
+
+struct ExecuteOrder {
+    bytes32 orderHash;
+    address user;
+    address solver;
+    address token;
+    uint256 amount;
+}
 
 contract DutchX {
+    IRouterClient public ccipRouter;
+
+    mapping(uint64 dstChain => address dutchX) public receiver;
+
     // mapping(address => uint256) public stakeAmounts;
     mapping(address => uint256) public userNonce;
     mapping(bytes32 => ClaimedOrder) public claimedOrders;
     mapping(bytes32 => address) public orderClaimedBy;
 
-    struct OrderInfo {
-        address from;
-        address fromToken;
-        address toToken;
-        uint256 fromChainId;
-        uint256 toChainId;
-        uint256 fromAmount;
-        uint256 startingPrice;
-        uint256 stakeAmount;
-        uint256 timestamp;
-        uint256 nonce;
+    modifier onlyRouter() {
+        require(msg.sender == address(ccipRouter), "dutchX/caller not router");
+        _;
     }
 
-    struct ClaimedOrder {
-        address from;
-        address solver;
-        address fromToken;
-        address toToken;
-        uint256 fromChainId;
-        uint256 toChainId;
-        uint256 fromAmount;
-        uint256 toAmount;
-        uint256 timestamp;
+    constructor(address router_) {
+        ccipRouter = IRouterClient(router_);
     }
 
     function claimOrder(bytes memory encodedOrderInfo, bytes memory signature) external {
@@ -56,7 +79,8 @@ contract DutchX {
             toChainId: order.toChainId,
             fromAmount: order.fromAmount,
             toAmount: toAmount,
-            timestamp: block.timestamp
+            timestamp: block.timestamp,
+            isCompleted: false
         });
 
         userNonce[signer] += 1;
@@ -64,6 +88,46 @@ contract DutchX {
 
         //TODO: Transfer needs to be a seperate function with message signature check
         IERC20(order.fromToken).transferFrom(msg.sender, address(this), order.stakeAmount);
+    }
+
+    function executeOrder(uint256 fromChainId, bytes32 orderHash, address user, address token, uint256 amount)
+        external
+        payable
+    {
+        uint64 fromChainIdCasted = uint64(fromChainId);
+
+        IERC20 tokenContract = IERC20(token);
+        uint256 userBalanceBefore = tokenContract.balanceOf(user);
+        tokenContract.transferFrom(msg.sender, user, amount);
+        uint256 userBalanceAfter = tokenContract.balanceOf(user);
+
+        require(userBalanceAfter - userBalanceBefore >= amount, "dutchX/revert transfer from");
+
+        /// construct the ccip message
+        EVM2AnyMessage memory message = EVM2AnyMessage(
+            abi.encode(receiver[fromChainIdCasted]),
+            abi.encode(ExecuteOrder(orderHash, user, msg.sender, token, amount)),
+            new EVMTokenAmount[](0),
+            address(0),
+            bytes("")
+        );
+
+        ccipRouter.ccipSend{value: ccipRouter.getFee(fromChainIdCasted, message)}(fromChainIdCasted, message);
+    }
+
+    function ccipReceive(Any2EVMMessage memory message) external onlyRouter {
+        /// ignore messageId storing for replay as we've innate replay protection
+        ExecuteOrder memory orderExecuted = abi.decode(message.data, (ExecuteOrder));
+
+        ClaimedOrder storage claimedOrder = claimedOrders[orderExecuted.orderHash];
+        require(!claimedOrder.isCompleted, "dutchX/already executed");
+        require(
+            claimedOrder.toToken == orderExecuted.token && claimedOrder.toAmount <= orderExecuted.amount,
+            "dutchX/ invalid filling on remote chain"
+        );
+        claimedOrder.isCompleted = true;
+
+        IERC20(claimedOrder.fromToken).transfer(claimedOrder.solver, claimedOrder.fromAmount);
     }
 
     function calculateCurrentPrice(uint256 startingPrice, uint256 timestamp) internal view returns (uint256) {
