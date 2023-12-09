@@ -4,8 +4,6 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./vendor/IRouterClient.sol";
 
-import "forge-std/console.sol";
-
 struct UserOrder {
     address from;
     uint256 fromChainId;
@@ -76,7 +74,7 @@ contract DutchX {
 
         UserOrder memory order = abi.decode(encodedUserOrder, (UserOrder));
         ClaimedOrder storage claimedOrder = claimedOrders[order.orderId];
-        console.log("BLOCK CHAIN ID", block.chainid);
+
         require(signer == order.from, "dutchX/invalid signature");
         require(order.nonce == userNonce[signer], "dutchX/invalid nonce");
         require(order.fromChainId == block.chainid, "dutchX/invalid from chain id");
@@ -118,9 +116,6 @@ contract DutchX {
 
         require(userBalanceAfter - userBalanceBefore >= amount, "dutchX/revert transfer from");
 
-        console.log(receiver[fromChainIdCasted], "receiver from chain id");
-        console.log(fromChainIdCasted, "from chain id casted");
-
         /// construct the ccip message
         EVM2AnyMessage memory message = EVM2AnyMessage(
             abi.encode(receiver[fromChainIdCasted]),
@@ -156,10 +151,8 @@ contract DutchX {
     ) internal view returns (uint256 toAmount) {
         uint256 decayFreq = (block.timestamp - orderCreatingTimestamp - 30) / 6;
         /// 6 sec decay
-        console.log(decayFreq, "decayFreq");
         uint256 decayAmount = (startingPrice - endingPrice) * 6 / duration - 30;
         toAmount = startingPrice - (decayFreq * decayAmount);
-        console.log(toAmount, "toAmount");
     }
 
     function recoverSigner(bytes memory encodedData, bytes memory signature) public pure returns (address) {
