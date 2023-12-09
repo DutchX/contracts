@@ -71,10 +71,10 @@ contract DutchX {
         require(order.nonce == userNonce[signer], "dutchX/invalid nonce");
         require(order.fromChainId == block.chainid, "dutchX/invalid from chain id");
         require(claimedOrder.solver == address(0), "dutchX/order already claimed");
+        require(block.timestamp > order.creationTimestamp + order.duration, "dutchX/order expired");
 
         uint256 toAmount =
             calculateToAmount(order.startingPrice, order.endingPrice, order.duration, order.creationTimestamp);
-        require(toAmount > 0, "dutchX/order expired");
 
         claimedOrder.from = order.from;
         claimedOrder.solver = msg.sender;
