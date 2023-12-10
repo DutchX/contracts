@@ -56,40 +56,40 @@ contract DutchXTest is Test {
     }
 
     function test_validOrder() external {
-        // vm.selectFork(ETH_FORK);
-        // vm.startPrank(user);
-        // usdt.approve(address(dutchXETH), 11e18);
-        // UserOrder memory order = UserOrder(
-        //     user,
-        //     ETH_CHAIN_ID,
-        //     address(usdt),
-        //     10e18,
-        //     BASE_CHAIN_ID,
-        //     address(wstETH),
-        //     1e18,
-        //     0.9e18,
-        //     1e18,
-        //     block.timestamp - 40 seconds,
-        //     180 seconds,
-        //     0,
-        //     "blah blah black sheep"
-        // );
+        vm.selectFork(ETH_FORK);
+        vm.startPrank(user);
+        usdt.approve(address(dutchXETH), 11e18);
+        UserOrder memory order = UserOrder(
+            user,
+            ETH_CHAIN_ID,
+            address(usdt),
+            10e18,
+            BASE_CHAIN_ID,
+            address(wstETH),
+            1e18,
+            0.9e18,
+            1e18,
+            block.timestamp - 40 seconds,
+            180 seconds,
+            0,
+            "blah blah black sheep"
+        );
 
-        // bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encode(order))));
-        // (uint8 v, bytes32 r, bytes32 s) = vm.sign(vm.envUint("PRIVATE_KEY"), digest);
-        // bytes memory signature = abi.encodePacked(r, s, v);
+        bytes32 digest = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encode(order))));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(vm.envUint("PRIVATE_KEY"), digest);
+        bytes memory signature = abi.encodePacked(r, s, v);
 
-        // console.log(block.timestamp - 40 seconds);
-        // console.logBytes32(digest);
-        // console.logBytes(signature);
-        // console.logBytes(abi.encode(order));
-        // vm.stopPrank();
+        console.log(block.timestamp - 40 seconds);
+        console.logBytes32(digest);
+        console.logBytes(signature);
+        console.logBytes(abi.encode(order));
+        vm.stopPrank();
 
-        // vm.startPrank(solver);
-        // usdt.approve(address(dutchXETH), 11e18);
-        // dutchXETH.claimOrder(abi.encode(order), signature);
+        vm.startPrank(solver);
+        usdt.approve(address(dutchXETH), 11e18);
+        dutchXETH.claimOrder(abi.encode(order), signature);
 
-        // vm.stopPrank();
+        vm.stopPrank();
 
         vm.selectFork(BASE_FORK);
         vm.startPrank(solver);
